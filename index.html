@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 音声文字起こし & ToDo抽出</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-sub: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --border: #e2e8f0;
+      --danger: #dc2626;
+      --danger-hover: #b91c1c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+    header { margin-bottom: 20px; }
+    h1 { font-size: 1.4rem; font-weight: 700; }
+    p.desc { font-size: 0.85rem; color: var(--text-sub); }
+    
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 12px;
+    }
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .input-group label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-sub);
+    }
+    .input-group input {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    @media (max-width: 640px) {
+      .config-grid, .input-grid { grid-template-columns: 1fr; }
+    }
+
+    .action-box {
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    button {
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 10px 16px;
+      border-radius: 6px;
+      border: none;
+      transition: background-color 0.2s;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: var(--danger-hover); }
+    .btn-copy {
+      background: #f1f5f9;
+      color: var(--text);
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+    }
+    .btn-copy:hover { background: #e2e8f0; }
+
+    .status-area {
+      display: none;
+      text-align: center;
+      padding: 20px;
+      font-weight: 600;
+      color: var(--primary);
+    }
+
+    .result-section {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    @media (max-width: 768px) {
+      .result-section { grid-template-columns: 1fr; }
+    }
+
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .result-header h2 { font-size: 1rem; }
+
+    .content-box {
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      color: #334155;
+      background: #fafafa;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #edf2f7;
+      min-height: 220px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    ul.todo-list { list-style: none; }
+    ul.todo-list li {
+      padding: 8px 10px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    ul.todo-list li::before {
+      content: "□";
+      font-weight: bold;
+      color: var(--primary);
+    }
+    .badge {
+      font-size: 0.75rem;
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 2px 8px;
+      border-radius: 9999px;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>AI 音声文字起こし & ToDo抽出</h1>
+    <p class="desc">ブラウザから直接録音するか音声ファイルをアップロードして解析します。</p>
+  </header>
+
+  <!-- 接続設定エリア -->
+  <div class="card">
+    <div class="config-grid">
+      <div class="input-group">
+        <label for="gasUrl">GAS Web App URL (末尾が /exec のURL)</label>
+        <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveConfig()">
+      </div>
+      <div class="input-group">
+        <label for="authToken">認証トークン (AUTH_TOKEN)</label>
+        <input type="password" id="authToken" placeholder="設定したパスワード" onchange="saveConfig()">
+      </div>
+    </div>
+  </div>
+
+  <!-- 音声入力エリア -->
+  <div class="card">
+    <div class="input-grid">
+      <div class="action-box">
+        <strong>🎙️ ブラウザで録音</strong>
+        <div id="recordTime" style="font-size: 1.2rem; font-weight: bold; display: none;">00:00</div>
+        <button id="recordBtn" class="btn-primary" onclick="toggleRecording()">録音を開始する</button>
+      </div>
+
+      <div class="action-box">
+        <strong>📁 音声ファイルを選択</strong>
+        <input type="file" id="audioFile" accept="audio/*" style="display: none;" onchange="handleFileSelect(event)">
+        <button class="btn-copy" onclick="document.getElementById('audioFile').click()">ファイルを選択 (.mp3, .m4a, .wav 等)</button>
+        <span id="fileName" style="font-size: 0.8rem; color: var(--text-sub);">未選択</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="statusArea" class="status-area">
+    ⏳ 音声データを解析中...（文字起こし・ToDo抽出を実行しています）
+  </div>
+
+  <!-- 結果表示エリア -->
+  <div id="resultContainer" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <span class="badge" id="modelBadge">使用モデル: -</span>
+      <button class="btn-copy" onclick="copyAll()">📋 全てまとめてコピー</button>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="result-header">
+        <h2>📌 全体要約</h2>
+        <button class="btn-copy" onclick="copyText('summaryText', this)">コピー</button>
+      </div>
+      <div id="summaryText" style="color: #334155; font-size: 0.95rem;"></div>
+    </div>
+
+    <div class="result-section">
+      <div class="card">
+        <div class="result-header">
+          <h2>📝 全文文字起こし</h2>
+          <button class="btn-copy" onclick="copyText('transcriptionText', this)">コピー</button>
+        </div>
+        <div id="transcriptionText" class="content-box"></div>
+      </div>
+
+      <div class="card">
+        <div class="result-header">
+          <h2>✅ 決定事項 & ToDoリスト</h2>
+          <button class="btn-copy" onclick="copyTodos(this)">コピー</button>
+        </div>
+        <div class="content-box">
+          <ul id="todoList" class="todo-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let mediaRecorder;
+    let audioChunks = [];
+    let recordInterval;
+    let seconds = 0;
+
+    // 設定の読み込み
+    window.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('gasUrl').value = localStorage.getItem('GEMINI_GAS_URL') || '';
+      document.getElementById('authToken').value = localStorage.getItem('GEMINI_AUTH_TOKEN') || '';
+    });
+
+    function saveConfig() {
+      localStorage.setItem('GEMINI_GAS_URL', document.getElementById('gasUrl').value.trim());
+      localStorage.setItem('GEMINI_AUTH_TOKEN', document.getElementById('authToken').value.trim());
+    }
+
+    // 録音の開始/停止
+    async function toggleRecording() {
+      const recordBtn = document.getElementById('recordBtn');
+      const timeDisplay = document.getElementById('recordTime');
+
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = event => {
+            if (event.data.size > 0) audioChunks.push(event.data);
+          };
+
+          mediaRecorder.onstop = () => {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            processBlob(audioBlob, 'audio/webm');
+            stream.getTracks().forEach(track => track.stop());
+          };
+
+          mediaRecorder.start();
+          recordBtn.textContent = '録音を停止して解析';
+          recordBtn.className = 'btn-danger';
+          timeDisplay.style.display = 'block';
+          seconds = 0;
+          recordInterval = setInterval(() => {
+            seconds++;
+            const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
+            const secs = String(seconds % 60).padStart(2, '0');
+            timeDisplay.textContent = `${mins}:${secs}`;
+          }, 1000);
+
+        } catch (err) {
+          alert('マイクの起動に失敗しました: ' + err.message);
+        }
+      } else {
+        mediaRecorder.stop();
+        clearInterval(recordInterval);
+        recordBtn.textContent = '録音を開始する';
+        recordBtn.className = 'btn-primary';
+        document.getElementById('recordTime').style.display = 'none';
+      }
+    }
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      document.getElementById('fileName').textContent = file.name;
+      processBlob(file, file.type || 'audio/mp3');
+    }
+
+    function processBlob(blob, mimeType) {
+      const gasUrl = document.getElementById('gasUrl').value.trim();
+      const authToken = document.getElementById('authToken').value.trim();
+
+      if (!gasUrl || !authToken) {
+        alert('接続先の「GAS Web App URL」と「認証トークン」を入力してください。');
+        return;
+      }
+
+      showStatus(true);
+      const reader = new FileReader();
+
+      reader.onloadend = async function() {
+        const base64Data = reader.result.split(',')[1];
+        const requestPayload = {
+          token: authToken,
+          base64Data: base64Data,
+          mimeType: mimeType
+        };
+
+        try {
+          // CORSプリフライトを回避するため text/plain でPOST
+          const res = await fetch(gasUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify(requestPayload)
+          });
+
+          const data = await res.json();
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
+
+          renderResult(data);
+        } catch (err) {
+          alert('エラー: ' + err.message);
+        } finally {
+          showStatus(false);
+        }
+      };
+
+      reader.readAsDataURL(blob);
+    }
+
+    function showStatus(isLoading) {
+      document.getElementById('statusArea').style.display = isLoading ? 'block' : 'none';
+      if (isLoading) {
+        document.getElementById('resultContainer').style.display = 'none';
+      }
+    }
+
+    function renderResult(res) {
+      document.getElementById('resultContainer').style.display = 'block';
+      document.getElementById('modelBadge').textContent = '使用モデル: ' + res.modelUsed;
+      document.getElementById('summaryText').textContent = res.summary;
+      document.getElementById('transcriptionText').textContent = res.transcription;
+
+      const todoList = document.getElementById('todoList');
+      todoList.innerHTML = '';
+      if (res.todos && res.todos.length > 0) {
+        res.todos.forEach(todo => {
+          const li = document.createElement('li');
+          li.textContent = todo;
+          todoList.appendChild(li);
+        });
+      } else {
+        const li = document.createElement('li');
+        li.textContent = '抽出されたToDoはありません。';
+        todoList.appendChild(li);
+      }
+    }
+
+    function copyText(elementId, btnElement) {
+      const text = document.getElementById(elementId).textContent;
+      navigator.clipboard.writeText(text).then(() => feedbackCopy(btnElement));
+    }
+
+    function copyTodos(btnElement) {
+      const items = Array.from(document.querySelectorAll('#todoList li'))
+        .map(li => '- ' + li.textContent.replace(/^□\s*/, ''))
+        .join('\n');
+      navigator.clipboard.writeText(items).then(() => feedbackCopy(btnElement));
+    }
+
+    function copyAll() {
+      const summary = document.getElementById('summaryText').textContent;
+      const todos = Array.from(document.querySelectorAll('#todoList li'))
+        .map(li => '- ' + li.textContent.replace(/^□\s*/, ''))
+        .join('\n');
+      const transcription = document.getElementById('transcriptionText').textContent;
+
+      const fullText = `【全体要約】\n${summary}\n\n【ToDo・決定事項】\n${todos}\n\n【全文文字起こし】\n${transcription}`;
+      navigator.clipboard.writeText(fullText).then(() => {
+        alert('全てのテキストをコピーしました！');
+      });
+    }
+
+    function feedbackCopy(btn) {
+      const originalText = btn.textContent;
+      btn.textContent = 'コピー完了！';
+      btn.style.backgroundColor = '#dcfce7';
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.style.backgroundColor = '';
+      }, 1500);
+    }
+  </script>
+</body>
+</html>
