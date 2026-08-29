@@ -817,10 +817,17 @@
       }
     }
 
+    function formatModelUsedLabel(res) {
+      if (res.transcribeModelUsed && res.analysisModelUsed) {
+        return '文字起こし: ' + res.transcribeModelUsed + ' / 解析: ' + res.analysisModelUsed;
+      }
+      return res.modelUsed || '-';
+    }
+
     function renderMeetingResult(res) {
       document.getElementById('resultContainer').style.display = 'block';
       document.getElementById('diaryResultContainer').style.display = 'none';
-      document.getElementById('modelBadge').textContent = '使用モデル: ' + (res.modelUsed || '-');
+      document.getElementById('modelBadge').textContent = '使用モデル: ' + formatModelUsedLabel(res);
       document.getElementById('summaryText').textContent = res.summary || '';
       document.getElementById('transcriptionText').textContent = res.transcription || '';
 
@@ -849,7 +856,7 @@
       lastDiaryText = diaryText;
       document.getElementById('diaryResultContainer').style.display = 'block';
       document.getElementById('resultContainer').style.display = 'none';
-      document.getElementById('diaryModelBadge').textContent = '使用モデル: ' + (res.modelUsed || '-');
+      document.getElementById('diaryModelBadge').textContent = '使用モデル: ' + formatModelUsedLabel(res);
       document.getElementById('diaryPreviewText').textContent = diaryText;
       document.getElementById('diaryTranscriptionText').textContent = res.transcription || '';
       document.getElementById('transcriptionDetails').open = false;
