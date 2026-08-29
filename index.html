@@ -261,6 +261,12 @@
       margin-top: 8px;
       line-height: 1.5;
     }
+    .ui-build-tag {
+      margin: 24px 0 8px;
+      text-align: center;
+      font-size: 0.7rem;
+      color: #94a3b8;
+    }
   </style>
 </head>
 <body>
@@ -379,7 +385,10 @@
     </div>
   </div>
 
+  <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
+
   <script>
+    const UI_BUILD = '2026-08-29-b';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -450,6 +459,7 @@
 
       updateStatusMessage();
       showFileProtocolWarningIfNeeded();
+      document.getElementById('uiBuildTag').textContent = 'UI build: ' + UI_BUILD;
     }
 
     function showFileProtocolWarningIfNeeded() {
