@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 音声文字起こし & ToDo抽出</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-sub: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --border: #e2e8f0;
+      --danger: #dc2626;
+      --danger-hover: #b91c1c;
+      --success: #16a34a;
+      --success-hover: #15803d;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      padding: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+    body.embed-mode {
+      padding: 16px;
+      max-width: 100%;
+    }
+    header { margin-bottom: 20px; }
+    h1 { font-size: 1.4rem; font-weight: 700; }
+    p.desc { font-size: 0.85rem; color: var(--text-sub); }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 12px;
+    }
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .input-group label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-sub);
+    }
+    .input-group input {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+
+    .input-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 12px;
+    }
+    @media (max-width: 640px) {
+      .config-grid, .input-grid { grid-template-columns: 1fr; }
+    }
+    body.embed-mode .input-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .action-box {
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    button {
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 10px 16px;
+      min-height: 44px;
+      border-radius: 6px;
+      border: none;
+      transition: background-color 0.2s;
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-success:hover:not(:disabled) { background: var(--success-hover); }
+    .btn-copy {
+      background: #f1f5f9;
+      color: var(--text);
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      min-height: auto;
+    }
+    .btn-copy:hover { background: #e2e8f0; }
+
+    .status-area {
+      display: none;
+      text-align: center;
+      padding: 20px;
+      font-weight: 600;
+      color: var(--primary);
+    }
+
+    .embed-waiting {
+      display: none;
+      text-align: center;
+      padding: 16px;
+      color: var(--text-sub);
+      font-size: 0.9rem;
+    }
+
+    .error-banner {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      font-size: 0.9rem;
+    }
+
+    .result-section {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+    @media (max-width: 768px) {
+      .result-section { grid-template-columns: 1fr; }
+    }
+
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .result-header h2 { font-size: 1rem; }
+
+    .content-box {
+      white-space: pre-wrap;
+      font-size: 0.9rem;
+      color: #334155;
+      background: #fafafa;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #edf2f7;
+      min-height: 120px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    .diary-preview-box {
+      min-height: 160px;
+    }
+
+    .diary-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    ul.todo-list { list-style: none; }
+    ul.todo-list li {
+      padding: 8px 10px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    ul.todo-list li::before {
+      content: "□";
+      font-weight: bold;
+      color: var(--primary);
+    }
+    .badge {
+      font-size: 0.75rem;
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 2px 8px;
+      border-radius: 9999px;
+    }
+    .embed-hint {
+      font-size: 0.8rem;
+      color: var(--text-sub);
+      margin-top: 4px;
+    }
+    .file-protocol-warning {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      color: #92400e;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .file-protocol-warning code {
+      font-size: 0.8rem;
+      word-break: break-all;
+    }
+    .gas-hosted-notice {
+      display: none;
+      margin-bottom: 16px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      color: #92400e;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    .action-box.recommended {
+      border-color: var(--primary);
+      background: #eff6ff;
+    }
+    .action-box.disabled-hint {
+      opacity: 0.65;
+    }
+    .action-hint {
+      font-size: 0.8rem;
+      color: var(--text-sub);
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+    .ui-build-tag {
+      margin: 24px 0 8px;
+      text-align: center;
+      font-size: 0.7rem;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1 id="pageTitle">AI 音声文字起こし & ToDo抽出</h1>
+    <p id="pageDesc" class="desc">ブラウザから直接録音するか音声ファイルをアップロードして解析します。</p>
+  </header>
+
+  <div id="embedWaiting" class="embed-waiting">家族アプリからの接続を待っています…</div>
+  <div id="fileProtocolWarning" class="file-protocol-warning" role="status">
+    <strong>⚠️ ファイルを直接開いています（file://）</strong><br>
+    この開き方では GAS への通信が失敗することがあります（Failed to fetch）。<br>
+    PowerShell で次を実行し、<code>http://localhost:5500</code> から開いてください。<br>
+    <code>cd "c:\Users\yasun\Desktop\アプリ\voice-ai-app"</code><br>
+    <code>npx --yes serve -p 5500</code>
+  </div>
+  <div id="gasHostedNotice" class="gas-hosted-notice" role="status">
+    <strong>GAS Webアプリから開いています</strong><br>
+    解析の通信は <code>google.script.run</code> 経由（URL・トークン入力不要）です。<br>
+    <strong>ブラウザ録音は GAS の仕様上使えません。</strong> 下の「音声ファイルを選択」から試してください。
+  </div>
+  <div id="errorBanner" class="error-banner" role="alert"></div>
+
+  <!-- 接続設定エリア -->
+  <div id="configCard" class="card">
+    <div class="config-grid">
+      <div class="input-group">
+        <label for="gasUrl">GAS Web App URL (末尾が /exec のURL)</label>
+        <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveConfig()">
+      </div>
+      <div class="input-group">
+        <label for="authToken">認証トークン (AUTH_TOKEN)</label>
+        <input type="password" id="authToken" placeholder="設定したパスワード" onchange="saveConfig()">
+      </div>
+    </div>
+  </div>
+
+  <!-- 音声入力エリア -->
+  <div class="card">
+    <div class="input-grid">
+      <div class="action-box">
+        <strong id="recordLabel">🎙️ ブラウザで録音</strong>
+        <div id="recordTime" style="font-size: 1.2rem; font-weight: bold; display: none;">00:00</div>
+        <button id="recordBtn" class="btn-primary" onclick="toggleRecording()">録音を開始する</button>
+        <p id="embedRecordHint" class="embed-hint" hidden>親子で話しかけながら録音してください（目安: 5分以内）</p>
+      </div>
+
+      <div id="fileUploadBox" class="action-box">
+        <strong>📁 音声ファイルを選択</strong>
+        <input type="file" id="audioFile" accept="audio/*" style="display: none;" onchange="handleFileSelect(event)">
+        <button class="btn-copy" onclick="document.getElementById('audioFile').click()">ファイルを選択 (.mp3, .m4a, .wav 等)</button>
+        <span id="fileName" style="font-size: 0.8rem; color: var(--text-sub);">未選択</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="statusArea" class="status-area">
+    ⏳ 音声データを解析中...
+  </div>
+
+  <!-- family_diary 結果 -->
+  <div id="diaryResultContainer" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <span class="badge" id="diaryModelBadge">使用モデル: -</span>
+    </div>
+    <div class="card">
+      <div class="result-header">
+        <h2>📔 作成された日記</h2>
+      </div>
+      <div id="diaryPreviewText" class="content-box diary-preview-box"></div>
+      <details id="transcriptionDetails" style="margin-top: 12px;">
+        <summary style="cursor: pointer; font-size: 0.85rem; color: var(--text-sub);">文字起こしを確認（任意）</summary>
+        <div id="diaryTranscriptionText" class="content-box" style="margin-top: 8px; min-height: 80px;"></div>
+      </details>
+      <div class="diary-actions">
+        <button id="applyDiaryBtn" type="button" class="btn-success" onclick="applyDiaryToParent()">日記に反映</button>
+        <button id="retryDiaryBtn" type="button" class="btn-copy" onclick="resetDiaryResult()">もう一度録音</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- meeting 結果表示エリア -->
+  <div id="resultContainer" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <span class="badge" id="modelBadge">使用モデル: -</span>
+      <button class="btn-copy" onclick="copyAll()">📋 全てまとめてコピー</button>
+    </div>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="result-header">
+        <h2>📌 全体要約</h2>
+        <button class="btn-copy" onclick="copyText('summaryText', this)">コピー</button>
+      </div>
+      <div id="summaryText" style="color: #334155; font-size: 0.95rem;"></div>
+    </div>
+
+    <div class="result-section">
+      <div class="card">
+        <div class="result-header">
+          <h2>📝 全文文字起こし</h2>
+          <button class="btn-copy" onclick="copyText('transcriptionText', this)">コピー</button>
+        </div>
+        <div id="transcriptionText" class="content-box"></div>
+      </div>
+
+      <div class="card">
+        <div class="result-header">
+          <h2>✅ 決定事項 & ToDoリスト</h2>
+          <button class="btn-copy" onclick="copyTodos(this)">コピー</button>
+        </div>
+        <div class="content-box">
+          <ul id="todoList" class="todo-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
+
+  <script>
+    const UI_BUILD = '2026-08-30-a';
+    let mediaRecorder;
+    let audioChunks = [];
+    let recordInterval;
+    let seconds = 0;
+    let currentMode = 'meeting';
+    let isEmbedMode = false;
+    let isPopupMode = false;
+    let embedReady = false;
+    let parentOrigin = '';
+    let requestId = '';
+    let lastDiaryText = '';
+    let useProxy = false;
+    let pendingAnalyzeResolver = null;
+    const MAX_RECORD_SECONDS = 300;
+    const ANALYZE_TIMEOUT_MS = 360000;
+
+    const GAS_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+
+    function canUseScriptRun() {
+      return typeof google !== 'undefined' && google.script && google.script.run;
+    }
+
+    function isGasHostedPage() {
+      return canUseScriptRun() && !isEmbedMode;
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initPage();
+    });
+
+    function initPage() {
+      const params = new URLSearchParams(window.location.search);
+      isEmbedMode = params.get('embed') === '1';
+      isPopupMode = params.get('popup') === '1';
+      const modeParam = String(params.get('mode') || '').trim();
+      if (modeParam === 'family_diary') {
+        currentMode = 'family_diary';
+      }
+
+      if (isEmbedMode) {
+        document.body.classList.add('embed-mode');
+        document.getElementById('configCard').style.display = 'none';
+        document.getElementById('embedWaiting').style.display = 'block';
+        setControlsEnabled(false);
+        bindEmbedMessageListener();
+
+        if (currentMode === 'family_diary') {
+          document.getElementById('pageTitle').textContent = '🎙️ 音声で日記を書く';
+          document.getElementById('pageDesc').textContent = isPopupMode
+            ? '親子で話しかけながら録音してください。完了後「日記に反映」を押すと家族アプリに戻ります。'
+            : '親子で話しかけながら録音ボタンを押して話してください。';
+          document.getElementById('recordLabel').textContent = '🎙️ 会話を録音';
+          document.getElementById('embedRecordHint').hidden = false;
+          document.title = '音声で日記を書く';
+        }
+
+        if (isPopupMode) {
+          const urlParentOrigin = String(params.get('parentOrigin') || '').trim();
+          const urlRequestId = String(params.get('requestId') || '').trim();
+          if (params.get('useProxy') === '1') {
+            useProxy = true;
+          }
+          if (urlParentOrigin && urlRequestId) {
+            parentOrigin = urlParentOrigin;
+            requestId = urlRequestId;
+            embedReady = true;
+            document.getElementById('embedWaiting').style.display = 'none';
+            clearError();
+            setControlsEnabled(true);
+            updateStatusMessage();
+          }
+        }
+      } else if (isGasHostedPage()) {
+        document.getElementById('configCard').style.display = 'none';
+        document.getElementById('gasHostedNotice').style.display = 'block';
+        document.getElementById('fileUploadBox').classList.add('recommended');
+        document.getElementById('recordLabel').closest('.action-box').classList.add('disabled-hint');
+        const recordHint = document.createElement('p');
+        recordHint.className = 'action-hint';
+        recordHint.textContent = 'GAS 上ではマイクがブロックされます。音声ファイルのアップロードをご利用ください。';
+        document.getElementById('recordBtn').insertAdjacentElement('afterend', recordHint);
+        embedReady = true;
+      } else {
+        document.getElementById('gasUrl').value = localStorage.getItem('GEMINI_GAS_URL') || '';
+        document.getElementById('authToken').value = localStorage.getItem('GEMINI_AUTH_TOKEN') || '';
+        embedReady = true;
+      }
+
+      updateStatusMessage();
+      showFileProtocolWarningIfNeeded();
+      document.getElementById('uiBuildTag').textContent = 'UI build: ' + UI_BUILD;
+    }
+
+    function showFileProtocolWarningIfNeeded() {
+      if (window.location.protocol === 'file:') {
+        document.getElementById('fileProtocolWarning').style.display = 'block';
+      }
+    }
+
+    function formatMicrophoneError(err) {
+      const message = err && err.message ? String(err.message) : '不明なエラー';
+      if (canUseScriptRun()) {
+        return 'マイクの起動に失敗しました（' + message + '）。GAS の画面ではブラウザ録音が使えないことがあります。「音声ファイルを選択」から試してください。';
+      }
+      if (isEmbedMode && !isPopupMode) {
+        return 'マイクの起動に失敗しました（' + message + '）。家族アプリ内の埋め込み表示ではマイクが使えないことがあります。アプリを更新するか、音声ファイルを選択してください。';
+      }
+      return 'マイクの起動に失敗しました: ' + message + '。ブラウザのマイク許可、Windows のプライバシー設定を確認してください。';
+    }
+
+    function formatFetchError(err) {
+      const message = err && err.message ? String(err.message) : '不明なエラー';
+      if (message !== 'Failed to fetch') {
+        return message;
+      }
+      if (window.location.protocol === 'file:') {
+        return '通信に失敗しました（Failed to fetch）。index.html を file:// で開いている可能性があります。GAS の「デプロイ URL」をブラウザで直接開くか、画面上部の localhost 手順を試してください。';
+      }
+      return '通信に失敗しました（Failed to fetch）。推奨: GAS の Webアプリ URL（末尾 /exec）をブラウザで直接開いてください。localhost からの fetch は CORS で失敗することがあります。';
+    }
+
+    function handleProcessSuccess(data) {
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+      if (currentMode === 'family_diary') {
+        renderFamilyDiaryResult(data);
+      } else {
+        renderMeetingResult(data);
+      }
+    }
+
+    function processViaScriptRun(requestPayload) {
+      google.script.run
+        .withSuccessHandler(function(data) {
+          try {
+            handleProcessSuccess(data);
+          } catch (err) {
+            notifyError(err.message || String(err));
+          } finally {
+            showStatus(false);
+          }
+        })
+        .withFailureHandler(function(err) {
+          notifyError((err && err.message) ? err.message : String(err));
+          showStatus(false);
+        })
+        .apiProcessAudio(requestPayload);
+    }
+
+    function rejectPendingAnalyze_(message) {
+      if (!pendingAnalyzeResolver) {
+        return;
+      }
+      const resolver = pendingAnalyzeResolver;
+      pendingAnalyzeResolver = null;
+      resolver.reject(new Error(message || '解析に失敗しました。'));
+    }
+
+    function resolvePendingAnalyze_(data) {
+      if (!pendingAnalyzeResolver) {
+        return;
+      }
+      const resolver = pendingAnalyzeResolver;
+      pendingAnalyzeResolver = null;
+      resolver.resolve(data);
+    }
+
+    function requestAnalysisViaParent_(requestPayload) {
+      return new Promise((resolve, reject) => {
+        if (pendingAnalyzeResolver) {
+          reject(new Error('別の解析が進行中です。'));
+          return;
+        }
+        pendingAnalyzeResolver = { resolve: resolve, reject: reject };
+        sendToParent({
+          type: 'AUDIO_DIARY_ANALYZE',
+          requestId: requestId,
+          mode: currentMode,
+          base64Data: requestPayload.base64Data,
+          mimeType: requestPayload.mimeType
+        });
+        setTimeout(() => {
+          if (!pendingAnalyzeResolver) {
+            return;
+          }
+          rejectPendingAnalyze_('解析がタイムアウトしました。しばらく待ってから再度お試しください。');
+        }, ANALYZE_TIMEOUT_MS);
+      });
+    }
+
+    function bindEmbedMessageListener() {
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object' || typeof data.type !== 'string') {
+          return;
+        }
+        if (parentOrigin && event.origin !== parentOrigin) {
+          return;
+        }
+        if (data.type === 'AUDIO_DIARY_ANALYZE_RESULT') {
+          if (!data.requestId || String(data.requestId) !== requestId) {
+            return;
+          }
+          if (data.ok) {
+            resolvePendingAnalyze_(data.data || {});
+          } else {
+            rejectPendingAnalyze_(data.error || '解析に失敗しました。');
+          }
+          return;
+        }
+        if (data.type !== 'AUDIO_DIARY_INIT') {
+          return;
+        }
+        if (!data.parentOrigin || event.origin !== data.parentOrigin) {
+          return;
+        }
+        if (!data.requestId || !data.parentOrigin) {
+          notifyError('接続設定が不完全です。');
+          return;
+        }
+        useProxy = data.useProxy === true;
+        if (!canUseScriptRun() && !useProxy) {
+          if (!data.gasUrl || !data.token) {
+            notifyError('接続設定が不完全です。');
+            return;
+          }
+          if (!GAS_URL_PATTERN.test(String(data.gasUrl).trim())) {
+            notifyError('接続先 URL の形式が正しくありません。');
+            return;
+          }
+          document.getElementById('gasUrl').value = String(data.gasUrl).trim();
+          document.getElementById('authToken').value = String(data.token).trim();
+        }
+
+        parentOrigin = data.parentOrigin;
+        requestId = String(data.requestId);
+        currentMode = data.mode === 'family_diary' ? 'family_diary' : currentMode;
+
+        embedReady = true;
+        document.getElementById('embedWaiting').style.display = 'none';
+        clearError();
+        setControlsEnabled(true);
+        updateStatusMessage();
+      });
+    }
+
+    function getMessageTarget_() {
+      if (isPopupMode && window.opener) {
+        return window.opener;
+      }
+      if (isEmbedMode && window.parent && window.parent !== window) {
+        return window.parent;
+      }
+      return null;
+    }
+
+    function sendToParent(message) {
+      const target = getMessageTarget_();
+      if (!isEmbedMode || !parentOrigin || !target) {
+        return;
+      }
+      target.postMessage(message, parentOrigin);
+    }
+
+    function notifyError(message) {
+      const text = String(message || 'エラーが発生しました');
+      const banner = document.getElementById('errorBanner');
+      banner.textContent = text;
+      banner.style.display = 'block';
+
+      if (isEmbedMode) {
+        sendToParent({
+          type: 'AUDIO_DIARY_ERROR',
+          requestId: requestId,
+          mode: currentMode,
+          error: text
+        });
+      } else {
+        alert('エラー: ' + text);
+      }
+    }
+
+    function clearError() {
+      const banner = document.getElementById('errorBanner');
+      banner.textContent = '';
+      banner.style.display = 'none';
+    }
+
+    function setControlsEnabled(enabled) {
+      document.getElementById('recordBtn').disabled = !enabled;
+      document.getElementById('audioFile').disabled = !enabled;
+    }
+
+    function updateStatusMessage() {
+      const statusArea = document.getElementById('statusArea');
+      if (currentMode === 'family_diary') {
+        statusArea.textContent = '⏳ 日記を作成しています...';
+      } else {
+        statusArea.textContent = '⏳ 音声データを解析中...（文字起こし・ToDo抽出を実行しています）';
+      }
+    }
+
+    function saveConfig() {
+      if (isEmbedMode) {
+        return;
+      }
+      localStorage.setItem('GEMINI_GAS_URL', document.getElementById('gasUrl').value.trim());
+      localStorage.setItem('GEMINI_AUTH_TOKEN', document.getElementById('authToken').value.trim());
+    }
+
+    function getRecorderOptions() {
+      const preferredTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/mpeg'];
+      if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) {
+        return {};
+      }
+      for (let i = 0; i < preferredTypes.length; i++) {
+        if (MediaRecorder.isTypeSupported(preferredTypes[i])) {
+          return { mimeType: preferredTypes[i] };
+        }
+      }
+      return {};
+    }
+
+    async function toggleRecording() {
+      const recordBtn = document.getElementById('recordBtn');
+      const timeDisplay = document.getElementById('recordTime');
+
+      if (!embedReady && isEmbedMode) {
+        notifyError('接続設定が完了していません。');
+        return;
+      }
+
+      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const recorderOptions = getRecorderOptions();
+          mediaRecorder = Object.keys(recorderOptions).length > 0
+            ? new MediaRecorder(stream, recorderOptions)
+            : new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = event => {
+            if (event.data.size > 0) audioChunks.push(event.data);
+          };
+
+          mediaRecorder.onstop = () => {
+            const mimeType = mediaRecorder.mimeType || 'audio/webm';
+            const audioBlob = new Blob(audioChunks, { type: mimeType });
+            processBlob(audioBlob, mimeType);
+            stream.getTracks().forEach(track => track.stop());
+          };
+
+          mediaRecorder.start();
+          recordBtn.textContent = '録音を停止して解析';
+          recordBtn.className = 'btn-danger';
+          timeDisplay.style.display = 'block';
+          seconds = 0;
+          timeDisplay.textContent = '00:00';
+          recordInterval = setInterval(() => {
+            seconds++;
+            const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
+            const secs = String(seconds % 60).padStart(2, '0');
+            timeDisplay.textContent = `${mins}:${secs}`;
+            if (seconds >= MAX_RECORD_SECONDS) {
+              mediaRecorder.stop();
+              clearInterval(recordInterval);
+              recordBtn.textContent = '録音を開始する';
+              recordBtn.className = 'btn-primary';
+              timeDisplay.style.display = 'none';
+              notifyError('録音時間の上限（5分）に達したため停止しました。');
+            }
+          }, 1000);
+
+        } catch (err) {
+          notifyError(formatMicrophoneError(err));
+        }
+      } else {
+        mediaRecorder.stop();
+        clearInterval(recordInterval);
+        recordBtn.textContent = '録音を開始する';
+        recordBtn.className = 'btn-primary';
+        timeDisplay.style.display = 'none';
+      }
+    }
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!embedReady && isEmbedMode) {
+        notifyError('接続設定が完了していません。');
+        return;
+      }
+      document.getElementById('fileName').textContent = file.name;
+      processBlob(file, file.type || 'audio/mp3');
+    }
+
+    function processBlob(blob, mimeType) {
+      if (!embedReady && isEmbedMode) {
+        notifyError('接続設定が完了していません。');
+        return;
+      }
+
+      clearError();
+      showStatus(true);
+      const reader = new FileReader();
+
+      reader.onloadend = async function() {
+        const base64Data = reader.result.split(',')[1];
+        const requestPayload = {
+          base64Data: base64Data,
+          mimeType: mimeType,
+          mode: currentMode
+        };
+
+        if (isEmbedMode && useProxy) {
+          try {
+            const data = await requestAnalysisViaParent_(requestPayload);
+            handleProcessSuccess(data);
+          } catch (err) {
+            notifyError(err.message || String(err));
+          } finally {
+            showStatus(false);
+          }
+          return;
+        }
+
+        if (canUseScriptRun()) {
+          processViaScriptRun(requestPayload);
+          return;
+        }
+
+        const gasUrl = document.getElementById('gasUrl').value.trim();
+        const authToken = document.getElementById('authToken').value.trim();
+
+        if (!gasUrl || !authToken) {
+          notifyError('接続先の「GAS Web App URL」と「認証トークン」を入力してください。');
+          showStatus(false);
+          return;
+        }
+
+        requestPayload.token = authToken;
+
+        try {
+          const res = await fetch(gasUrl, {
+            method: 'POST',
+            mode: 'cors',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(requestPayload)
+          });
+
+          const data = await res.json();
+          handleProcessSuccess(data);
+        } catch (err) {
+          notifyError(formatFetchError(err));
+        } finally {
+          showStatus(false);
+        }
+      };
+
+      reader.readAsDataURL(blob);
+    }
+
+    function showStatus(isLoading) {
+      document.getElementById('statusArea').style.display = isLoading ? 'block' : 'none';
+      if (isLoading) {
+        document.getElementById('resultContainer').style.display = 'none';
+        document.getElementById('diaryResultContainer').style.display = 'none';
+      }
+    }
+
+    function formatModelUsedLabel(res) {
+      if (res.transcribeModelUsed && res.analysisModelUsed) {
+        return '文字起こし: ' + res.transcribeModelUsed + ' / 解析: ' + res.analysisModelUsed;
+      }
+      return res.modelUsed || '-';
+    }
+
+    function renderMeetingResult(res) {
+      document.getElementById('resultContainer').style.display = 'block';
+      document.getElementById('diaryResultContainer').style.display = 'none';
+      document.getElementById('modelBadge').textContent = '使用モデル: ' + formatModelUsedLabel(res);
+      document.getElementById('summaryText').textContent = res.summary || '';
+      document.getElementById('transcriptionText').textContent = res.transcription || '';
+
+      const todoList = document.getElementById('todoList');
+      todoList.innerHTML = '';
+      if (res.todos && res.todos.length > 0) {
+        res.todos.forEach(todo => {
+          const li = document.createElement('li');
+          li.textContent = todo;
+          todoList.appendChild(li);
+        });
+      } else {
+        const li = document.createElement('li');
+        li.textContent = '抽出されたToDoはありません。';
+        todoList.appendChild(li);
+      }
+    }
+
+    function renderFamilyDiaryResult(res) {
+      const diaryText = String(res.diary || '').trim();
+      if (!diaryText) {
+        notifyError('日記を作成できませんでした。もう少し詳しく話してみてください。');
+        return;
+      }
+
+      lastDiaryText = diaryText;
+      document.getElementById('diaryResultContainer').style.display = 'block';
+      document.getElementById('resultContainer').style.display = 'none';
+      document.getElementById('diaryModelBadge').textContent = '使用モデル: ' + formatModelUsedLabel(res);
+      document.getElementById('diaryPreviewText').textContent = diaryText;
+      document.getElementById('diaryTranscriptionText').textContent = res.transcription || '';
+      document.getElementById('transcriptionDetails').open = false;
+    }
+
+    function resetDiaryResult() {
+      lastDiaryText = '';
+      document.getElementById('diaryResultContainer').style.display = 'none';
+      document.getElementById('audioFile').value = '';
+      document.getElementById('fileName').textContent = '未選択';
+      clearError();
+    }
+
+    function applyDiaryToParent() {
+      const diaryText = String(lastDiaryText || '').trim();
+      if (!diaryText) {
+        notifyError('反映する日記がありません。');
+        return;
+      }
+      if (diaryText.length > 2000) {
+        notifyError('日記が長すぎます（2000文字以内）。');
+        return;
+      }
+
+      if (isEmbedMode) {
+        sendToParent({
+          type: 'AUDIO_DIARY_RESULT',
+          requestId: requestId,
+          mode: 'family_diary',
+          diary: diaryText
+        });
+        sendToParent({
+          type: 'AUDIO_DIARY_CLOSE',
+          requestId: requestId
+        });
+        if (isPopupMode) {
+          window.setTimeout(function() { window.close(); }, 300);
+        }
+        return;
+      }
+
+      alert('スタンドアロン利用時は、表示された日記文をコピーしてご利用ください。');
+    }
+
+    function copyText(elementId, btnElement) {
+      const text = document.getElementById(elementId).textContent;
+      navigator.clipboard.writeText(text).then(() => feedbackCopy(btnElement));
+    }
+
+    function copyTodos(btnElement) {
+      const items = Array.from(document.querySelectorAll('#todoList li'))
+        .map(li => '- ' + li.textContent.replace(/^□\s*/, ''))
+        .join('\n');
+      navigator.clipboard.writeText(items).then(() => feedbackCopy(btnElement));
+    }
+
+    function copyAll() {
+      const summary = document.getElementById('summaryText').textContent;
+      const todos = Array.from(document.querySelectorAll('#todoList li'))
+        .map(li => '- ' + li.textContent.replace(/^□\s*/, ''))
+        .join('\n');
+      const transcription = document.getElementById('transcriptionText').textContent;
+
+      const fullText = `【全体要約】\n${summary}\n\n【ToDo・決定事項】\n${todos}\n\n【全文文字起こし】\n${transcription}`;
+      navigator.clipboard.writeText(fullText).then(() => {
+        alert('全てのテキストをコピーしました！');
+      });
+    }
+
+    function feedbackCopy(btn) {
+      const originalText = btn.textContent;
+      btn.textContent = 'コピー完了！';
+      btn.style.backgroundColor = '#dcfce7';
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.style.backgroundColor = '';
+      }, 1500);
+    }
+  </script>
+</body>
+</html>
