@@ -267,6 +267,23 @@
       font-size: 0.7rem;
       color: #94a3b8;
     }
+    .voice-debug-panel {
+      display: none;
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      line-height: 1.5;
+      color: #334155;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    body.embed-mode .voice-debug-panel {
+      display: block;
+    }
   </style>
 </head>
 <body>
@@ -290,6 +307,7 @@
     <strong>ブラウザ録音は GAS の仕様上使えません。</strong> 下の「音声ファイルを選択」から試してください。
   </div>
   <div id="errorBanner" class="error-banner" role="alert"></div>
+  <pre id="voiceDebugPanel" class="voice-debug-panel" aria-live="polite"></pre>
 
   <!-- 接続設定エリア -->
   <div id="configCard" class="card">
@@ -388,7 +406,7 @@
   <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
 
   <script>
-    const UI_BUILD = '2026-08-30-b';
+    const UI_BUILD = '2026-08-30-c';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -403,10 +421,41 @@
     let useProxy = false;
     let pendingAnalyzeResolver = null;
     let pendingAnalyzeRequest = null;
+    let debugPollCount = 0;
+    let debugLastEvent = '-';
     const MAX_RECORD_SECONDS = 300;
     const ANALYZE_TIMEOUT_MS = 360000;
 
     const GAS_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+
+    function voiceDebugLog(eventLabel, detail) {
+      debugLastEvent = eventLabel;
+      if (!isEmbedMode) {
+        return;
+      }
+      const panel = document.getElementById('voiceDebugPanel');
+      if (!panel) {
+        return;
+      }
+      const lines = [
+        '[テスト用デバッグ]',
+        'UI: ' + UI_BUILD,
+        '時刻: ' + new Date().toLocaleTimeString('ja-JP'),
+        '状態: ' + eventLabel,
+        'requestId: ' + (requestId || '-'),
+        'parentOrigin: ' + (parentOrigin || '-'),
+        'opener: ' + (window.opener ? 'あり' : 'なし'),
+        'useProxy: ' + (useProxy ? 'yes' : 'no'),
+        '解析待ち: ' + (pendingAnalyzeRequest ? 'yes' : 'no'),
+        'POLL受信: ' + debugPollCount + '回',
+        detail ? ('詳細: ' + detail) : ''
+      ].filter(Boolean);
+      panel.textContent = lines.join('\n');
+    }
+
+    function markAnalyzeRequestSent_() {
+      pendingAnalyzeRequest = null;
+    }
 
     function canUseScriptRun() {
       return typeof google !== 'undefined' && google.script && google.script.run;
@@ -460,6 +509,7 @@
             clearError();
             setControlsEnabled(true);
             updateStatusMessage();
+            voiceDebugLog('接続準備完了', 'URLパラメータから初期化');
           }
         }
       } else if (isGasHostedPage()) {
@@ -481,6 +531,9 @@
       updateStatusMessage();
       showFileProtocolWarningIfNeeded();
       document.getElementById('uiBuildTag').textContent = 'UI build: ' + UI_BUILD;
+      if (isEmbedMode && currentMode === 'family_diary') {
+        voiceDebugLog('画面起動', isPopupMode ? 'ポップアップモード' : '埋め込みモード');
+      }
     }
 
     function showFileProtocolWarningIfNeeded() {
@@ -578,9 +631,11 @@
         }
         pendingAnalyzeResolver = { resolve: resolve, reject: reject };
         pendingAnalyzeRequest = requestPayload;
-        if (!sendToParent(buildAnalyzeMessage_(requestPayload)) && isPopupMode) {
-          // GAS サンドボックスでは window.opener が null になることがある。
-          // 親側のポーリング（AUDIO_DIARY_POLL）経由で解析依頼を送る。
+        if (sendToParent(buildAnalyzeMessage_(requestPayload))) {
+          markAnalyzeRequestSent_();
+          voiceDebugLog('解析依頼送信', 'opener 経由');
+        } else if (isPopupMode) {
+          voiceDebugLog('解析依頼待機', 'opener なし → 親の POLL 待ち');
         }
         setTimeout(() => {
           if (!pendingAnalyzeResolver) {
@@ -596,7 +651,8 @@
         return false;
       }
       sourceWindow.postMessage(buildAnalyzeMessage_(pendingAnalyzeRequest), targetOrigin);
-      pendingAnalyzeRequest = null;
+      markAnalyzeRequestSent_();
+      voiceDebugLog('解析依頼送信', 'POLL 応答経由');
       return true;
     }
 
@@ -614,8 +670,10 @@
             return;
           }
           if (data.ok) {
+            voiceDebugLog('解析結果受信', '成功');
             resolvePendingAnalyze_(data.data || {});
           } else {
+            voiceDebugLog('解析結果受信', '失敗: ' + (data.error || ''));
             rejectPendingAnalyze_(data.error || '解析に失敗しました。');
           }
           return;
@@ -623,6 +681,10 @@
         if (data.type === 'AUDIO_DIARY_POLL') {
           if (!data.requestId || String(data.requestId) !== requestId) {
             return;
+          }
+          debugPollCount += 1;
+          if (debugPollCount === 1 || debugPollCount % 10 === 0) {
+            voiceDebugLog('POLL受信', debugPollCount + '回目');
           }
           replyAnalyzeRequestToParent_(event.source, parentOrigin);
           return;
@@ -660,6 +722,7 @@
         clearError();
         setControlsEnabled(true);
         updateStatusMessage();
+        voiceDebugLog('接続準備完了', 'INIT メッセージ受信');
       });
     }
 
@@ -822,6 +885,7 @@
 
       clearError();
       showStatus(true);
+      voiceDebugLog('録音完了', '解析を開始します');
       const reader = new FileReader();
 
       reader.onloadend = async function() {
