@@ -329,7 +329,8 @@
       <div class="action-box">
         <strong id="recordLabel">🎙️ ブラウザで録音</strong>
         <div id="recordTime" style="font-size: 1.2rem; font-weight: bold; display: none;">00:00</div>
-        <button id="recordBtn" class="btn-primary" onclick="toggleRecording()">録音を開始する</button>
+        <button id="recordBtn" class="btn-primary" onclick="startRecording()">録音を開始する</button>
+        <button id="stopRecordBtn" class="btn-danger" onclick="stopRecording()" hidden>■ 録音を停止して解析する</button>
         <p id="embedRecordHint" class="embed-hint" hidden>親子で話しかけながら録音してください（目安: 5分以内）</p>
       </div>
 
@@ -406,7 +407,7 @@
   <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
 
   <script>
-    const UI_BUILD = '2026-08-30-c';
+    const UI_BUILD = '2026-08-30-d';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -451,6 +452,33 @@
         detail ? ('詳細: ' + detail) : ''
       ].filter(Boolean);
       panel.textContent = lines.join('\n');
+    }
+
+    function isTrustedParentOrigin(origin) {
+      if (!origin) {
+        return false;
+      }
+      if (parentOrigin && origin === parentOrigin) {
+        return true;
+      }
+      if (/^https:\/\/([a-z0-9-]+\.)?googleusercontent\.com$/i.test(origin)) {
+        return true;
+      }
+      if (origin === 'https://script.google.com') {
+        return true;
+      }
+      return false;
+    }
+
+    function getParentPostTargets_() {
+      const targets = [];
+      if (parentOrigin) {
+        targets.push(parentOrigin);
+      }
+      if (parentOrigin && parentOrigin.indexOf('googleusercontent.com') !== -1) {
+        targets.push('https://script.google.com');
+      }
+      return targets;
     }
 
     function markAnalyzeRequestSent_() {
@@ -635,7 +663,9 @@
           markAnalyzeRequestSent_();
           voiceDebugLog('解析依頼送信', 'opener 経由');
         } else if (isPopupMode) {
-          voiceDebugLog('解析依頼待機', 'opener なし → 親の POLL 待ち');
+          voiceDebugLog('解析依頼待機', 'opener 送信失敗 → 親の POLL 待ち');
+        } else {
+          voiceDebugLog('解析依頼失敗', '親ウィンドウに届きませんでした');
         }
         setTimeout(() => {
           if (!pendingAnalyzeResolver) {
@@ -652,7 +682,7 @@
       }
       sourceWindow.postMessage(buildAnalyzeMessage_(pendingAnalyzeRequest), targetOrigin);
       markAnalyzeRequestSent_();
-      voiceDebugLog('解析依頼送信', 'POLL 応答経由');
+      voiceDebugLog('解析依頼送信', 'POLL 応答 → ' + targetOrigin);
       return true;
     }
 
@@ -662,7 +692,7 @@
         if (!data || typeof data !== 'object' || typeof data.type !== 'string') {
           return;
         }
-        if (parentOrigin && event.origin !== parentOrigin) {
+        if (!isTrustedParentOrigin(event.origin)) {
           return;
         }
         if (data.type === 'AUDIO_DIARY_ANALYZE_RESULT') {
@@ -682,17 +712,20 @@
           if (!data.requestId || String(data.requestId) !== requestId) {
             return;
           }
+          if (data.parentOrigin) {
+            parentOrigin = String(data.parentOrigin);
+          }
           debugPollCount += 1;
           if (debugPollCount === 1 || debugPollCount % 10 === 0) {
             voiceDebugLog('POLL受信', debugPollCount + '回目');
           }
-          replyAnalyzeRequestToParent_(event.source, parentOrigin);
+          replyAnalyzeRequestToParent_(event.source, event.origin);
           return;
         }
         if (data.type !== 'AUDIO_DIARY_INIT') {
           return;
         }
-        if (!data.parentOrigin || event.origin !== data.parentOrigin) {
+        if (!data.parentOrigin || !isTrustedParentOrigin(event.origin)) {
           return;
         }
         if (!data.requestId || !data.parentOrigin) {
@@ -738,11 +771,23 @@
 
     function sendToParent(message) {
       const target = getMessageTarget_();
-      if (!isEmbedMode || !parentOrigin || !target) {
+      if (!isEmbedMode || !target) {
         return false;
       }
-      target.postMessage(message, parentOrigin);
-      return true;
+      const targets = getParentPostTargets_();
+      if (!targets.length) {
+        return false;
+      }
+      let sent = false;
+      for (let i = 0; i < targets.length; i++) {
+        try {
+          target.postMessage(message, targets[i]);
+          sent = true;
+        } catch (err) {
+          // 別 origin を試す
+        }
+      }
+      return sent;
     }
 
     function notifyError(message) {
@@ -770,8 +815,13 @@
     }
 
     function setControlsEnabled(enabled) {
-      document.getElementById('recordBtn').disabled = !enabled;
-      document.getElementById('audioFile').disabled = !enabled;
+      const isRecording = mediaRecorder && mediaRecorder.state === 'recording';
+      document.getElementById('recordBtn').disabled = !enabled || isRecording;
+      const stopBtn = document.getElementById('stopRecordBtn');
+      if (stopBtn) {
+        stopBtn.disabled = !enabled || !isRecording;
+      }
+      document.getElementById('audioFile').disabled = !enabled || isRecording;
     }
 
     function updateStatusMessage() {
@@ -804,66 +854,90 @@
       return {};
     }
 
-    async function toggleRecording() {
+    let activeRecordStream = null;
+
+    function setRecordingUi(isRecording) {
       const recordBtn = document.getElementById('recordBtn');
+      const stopBtn = document.getElementById('stopRecordBtn');
+      const timeDisplay = document.getElementById('recordTime');
+      if (recordBtn) {
+        recordBtn.hidden = isRecording;
+        recordBtn.disabled = isRecording;
+      }
+      if (stopBtn) {
+        stopBtn.hidden = !isRecording;
+        stopBtn.disabled = !isRecording;
+      }
+      if (timeDisplay) {
+        timeDisplay.style.display = isRecording ? 'block' : 'none';
+      }
+    }
+
+    async function startRecording() {
       const timeDisplay = document.getElementById('recordTime');
 
       if (!embedReady && isEmbedMode) {
         notifyError('接続設定が完了していません。');
         return;
       }
-
-      if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const recorderOptions = getRecorderOptions();
-          mediaRecorder = Object.keys(recorderOptions).length > 0
-            ? new MediaRecorder(stream, recorderOptions)
-            : new MediaRecorder(stream);
-          audioChunks = [];
-
-          mediaRecorder.ondataavailable = event => {
-            if (event.data.size > 0) audioChunks.push(event.data);
-          };
-
-          mediaRecorder.onstop = () => {
-            const mimeType = mediaRecorder.mimeType || 'audio/webm';
-            const audioBlob = new Blob(audioChunks, { type: mimeType });
-            processBlob(audioBlob, mimeType);
-            stream.getTracks().forEach(track => track.stop());
-          };
-
-          mediaRecorder.start();
-          recordBtn.textContent = '録音を停止して解析';
-          recordBtn.className = 'btn-danger';
-          timeDisplay.style.display = 'block';
-          seconds = 0;
-          timeDisplay.textContent = '00:00';
-          recordInterval = setInterval(() => {
-            seconds++;
-            const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
-            const secs = String(seconds % 60).padStart(2, '0');
-            timeDisplay.textContent = `${mins}:${secs}`;
-            if (seconds >= MAX_RECORD_SECONDS) {
-              mediaRecorder.stop();
-              clearInterval(recordInterval);
-              recordBtn.textContent = '録音を開始する';
-              recordBtn.className = 'btn-primary';
-              timeDisplay.style.display = 'none';
-              notifyError('録音時間の上限（5分）に達したため停止しました。');
-            }
-          }, 1000);
-
-        } catch (err) {
-          notifyError(formatMicrophoneError(err));
-        }
-      } else {
-        mediaRecorder.stop();
-        clearInterval(recordInterval);
-        recordBtn.textContent = '録音を開始する';
-        recordBtn.className = 'btn-primary';
-        timeDisplay.style.display = 'none';
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        return;
       }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        activeRecordStream = stream;
+        const recorderOptions = getRecorderOptions();
+        mediaRecorder = Object.keys(recorderOptions).length > 0
+          ? new MediaRecorder(stream, recorderOptions)
+          : new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = event => {
+          if (event.data.size > 0) audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          const mimeType = mediaRecorder.mimeType || 'audio/webm';
+          const audioBlob = new Blob(audioChunks, { type: mimeType });
+          if (activeRecordStream) {
+            activeRecordStream.getTracks().forEach(track => track.stop());
+            activeRecordStream = null;
+          }
+          setRecordingUi(false);
+          processBlob(audioBlob, mimeType);
+        };
+
+        mediaRecorder.start();
+        setRecordingUi(true);
+        voiceDebugLog('録音開始', '');
+        seconds = 0;
+        timeDisplay.textContent = '00:00';
+        recordInterval = setInterval(() => {
+          seconds++;
+          const mins = String(Math.floor(seconds / 60)).padStart(2, '0');
+          const secs = String(seconds % 60).padStart(2, '0');
+          timeDisplay.textContent = `${mins}:${secs}`;
+          if (seconds >= MAX_RECORD_SECONDS) {
+            stopRecording(true);
+            notifyError('録音時間の上限（5分）に達したため停止しました。');
+          }
+        }, 1000);
+      } catch (err) {
+        setRecordingUi(false);
+        notifyError(formatMicrophoneError(err));
+      }
+    }
+
+    function stopRecording(fromLimit) {
+      if (!mediaRecorder || mediaRecorder.state !== 'recording') {
+        return;
+      }
+      clearInterval(recordInterval);
+      if (!fromLimit) {
+        voiceDebugLog('録音停止', '解析を開始します');
+      }
+      mediaRecorder.stop();
     }
 
     function handleFileSelect(event) {
