@@ -388,7 +388,7 @@
   <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
 
   <script>
-    const UI_BUILD = '2026-08-30-a';
+    const UI_BUILD = '2026-08-30-b';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -402,6 +402,7 @@
     let lastDiaryText = '';
     let useProxy = false;
     let pendingAnalyzeResolver = null;
+    let pendingAnalyzeRequest = null;
     const MAX_RECORD_SECONDS = 300;
     const ANALYZE_TIMEOUT_MS = 360000;
 
@@ -545,6 +546,7 @@
       }
       const resolver = pendingAnalyzeResolver;
       pendingAnalyzeResolver = null;
+      pendingAnalyzeRequest = null;
       resolver.reject(new Error(message || '解析に失敗しました。'));
     }
 
@@ -554,7 +556,18 @@
       }
       const resolver = pendingAnalyzeResolver;
       pendingAnalyzeResolver = null;
+      pendingAnalyzeRequest = null;
       resolver.resolve(data);
+    }
+
+    function buildAnalyzeMessage_(requestPayload) {
+      return {
+        type: 'AUDIO_DIARY_ANALYZE',
+        requestId: requestId,
+        mode: currentMode,
+        base64Data: requestPayload.base64Data,
+        mimeType: requestPayload.mimeType
+      };
     }
 
     function requestAnalysisViaParent_(requestPayload) {
@@ -564,13 +577,11 @@
           return;
         }
         pendingAnalyzeResolver = { resolve: resolve, reject: reject };
-        sendToParent({
-          type: 'AUDIO_DIARY_ANALYZE',
-          requestId: requestId,
-          mode: currentMode,
-          base64Data: requestPayload.base64Data,
-          mimeType: requestPayload.mimeType
-        });
+        pendingAnalyzeRequest = requestPayload;
+        if (!sendToParent(buildAnalyzeMessage_(requestPayload)) && isPopupMode) {
+          // GAS サンドボックスでは window.opener が null になることがある。
+          // 親側のポーリング（AUDIO_DIARY_POLL）経由で解析依頼を送る。
+        }
         setTimeout(() => {
           if (!pendingAnalyzeResolver) {
             return;
@@ -578,6 +589,15 @@
           rejectPendingAnalyze_('解析がタイムアウトしました。しばらく待ってから再度お試しください。');
         }, ANALYZE_TIMEOUT_MS);
       });
+    }
+
+    function replyAnalyzeRequestToParent_(sourceWindow, targetOrigin) {
+      if (!pendingAnalyzeRequest || !pendingAnalyzeResolver || !sourceWindow || !targetOrigin) {
+        return false;
+      }
+      sourceWindow.postMessage(buildAnalyzeMessage_(pendingAnalyzeRequest), targetOrigin);
+      pendingAnalyzeRequest = null;
+      return true;
     }
 
     function bindEmbedMessageListener() {
@@ -598,6 +618,13 @@
           } else {
             rejectPendingAnalyze_(data.error || '解析に失敗しました。');
           }
+          return;
+        }
+        if (data.type === 'AUDIO_DIARY_POLL') {
+          if (!data.requestId || String(data.requestId) !== requestId) {
+            return;
+          }
+          replyAnalyzeRequestToParent_(event.source, parentOrigin);
           return;
         }
         if (data.type !== 'AUDIO_DIARY_INIT') {
@@ -649,9 +676,10 @@
     function sendToParent(message) {
       const target = getMessageTarget_();
       if (!isEmbedMode || !parentOrigin || !target) {
-        return;
+        return false;
       }
       target.postMessage(message, parentOrigin);
+      return true;
     }
 
     function notifyError(message) {
