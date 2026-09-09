@@ -407,7 +407,7 @@
   <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
 
   <script>
-    const UI_BUILD = '2026-08-30-d';
+    const UI_BUILD = '2026-09-06-b';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -417,12 +417,18 @@
     let isPopupMode = false;
     let embedReady = false;
     let parentOrigin = '';
+    let lastParentSource = null;
+    let lastParentOrigin = '';
     let requestId = '';
     let lastDiaryText = '';
     let useProxy = false;
     let pendingAnalyzeResolver = null;
     let pendingAnalyzeRequest = null;
     let debugPollCount = 0;
+    let debugPingSendCount = 0;
+    let debugPongRecvCount = 0;
+    let parentPingTimer = null;
+    let analyzeAcceptedByParent_ = false;
     let debugLastEvent = '-';
     const MAX_RECORD_SECONDS = 300;
     const ANALYZE_TIMEOUT_MS = 360000;
@@ -445,9 +451,12 @@
         '状態: ' + eventLabel,
         'requestId: ' + (requestId || '-'),
         'parentOrigin: ' + (parentOrigin || '-'),
+        'lastParentOrigin: ' + (lastParentOrigin || '-'),
         'opener: ' + (window.opener ? 'あり' : 'なし'),
         'useProxy: ' + (useProxy ? 'yes' : 'no'),
-        '解析待ち: ' + (pendingAnalyzeRequest ? 'yes' : 'no'),
+        '解析待ち: ' + (pendingAnalyzeResolver ? 'yes' : 'no'),
+        'PING送信: ' + debugPingSendCount + '回',
+        'PONG受信: ' + debugPongRecvCount + '回',
         'POLL受信: ' + debugPollCount + '回',
         detail ? ('詳細: ' + detail) : ''
       ].filter(Boolean);
@@ -457,6 +466,9 @@
     function isTrustedParentOrigin(origin) {
       if (!origin) {
         return false;
+      }
+      if (lastParentOrigin && origin === lastParentOrigin) {
+        return true;
       }
       if (parentOrigin && origin === parentOrigin) {
         return true;
@@ -470,19 +482,70 @@
       return false;
     }
 
+    function rememberParentChannel_(sourceWindow, origin) {
+      if (sourceWindow) {
+        lastParentSource = sourceWindow;
+      }
+      if (origin && isTrustedParentOrigin(origin)) {
+        lastParentOrigin = origin;
+        parentOrigin = origin;
+      }
+    }
+
     function getParentPostTargets_() {
       const targets = [];
-      if (parentOrigin) {
-        targets.push(parentOrigin);
+      function add(origin) {
+        if (origin && targets.indexOf(origin) === -1) {
+          targets.push(origin);
+        }
       }
+      add(lastParentOrigin);
+      add(parentOrigin);
+      add('https://script.google.com');
       if (parentOrigin && parentOrigin.indexOf('googleusercontent.com') !== -1) {
-        targets.push('https://script.google.com');
+        add('https://script.google.com');
       }
       return targets;
     }
 
-    function markAnalyzeRequestSent_() {
-      pendingAnalyzeRequest = null;
+    function stopParentPing_() {
+      if (parentPingTimer) {
+        clearInterval(parentPingTimer);
+        parentPingTimer = null;
+      }
+    }
+
+    function buildPingMessage_() {
+      const message = {
+        type: 'AUDIO_DIARY_PING',
+        requestId: requestId
+      };
+      if (pendingAnalyzeResolver && pendingAnalyzeRequest && !analyzeAcceptedByParent_) {
+        message.needsAnalyze = true;
+        message.base64Data = pendingAnalyzeRequest.base64Data;
+        message.mimeType = pendingAnalyzeRequest.mimeType;
+        message.mode = currentMode;
+      }
+      return message;
+    }
+
+    function startParentPing_() {
+      if (!isPopupMode || !useProxy || parentPingTimer) {
+        return;
+      }
+      parentPingTimer = setInterval(() => {
+        if (!embedReady || !requestId) {
+          return;
+        }
+        debugPingSendCount += 1;
+        const sent = sendToParent(buildPingMessage_());
+        if (debugPingSendCount === 1 || debugPingSendCount % 10 === 0) {
+          voiceDebugLog(
+            sent ? 'PING送信中' : 'PING送信失敗',
+            debugPingSendCount + '回目 / PONG: ' + debugPongRecvCount
+          );
+        }
+      }, 500);
     }
 
     function canUseScriptRun() {
@@ -538,6 +601,7 @@
             setControlsEnabled(true);
             updateStatusMessage();
             voiceDebugLog('接続準備完了', 'URLパラメータから初期化');
+            startParentPing_();
           }
         }
       } else if (isGasHostedPage()) {
@@ -659,14 +723,10 @@
         }
         pendingAnalyzeResolver = { resolve: resolve, reject: reject };
         pendingAnalyzeRequest = requestPayload;
-        if (sendToParent(buildAnalyzeMessage_(requestPayload))) {
-          markAnalyzeRequestSent_();
-          voiceDebugLog('解析依頼送信', 'opener 経由');
-        } else if (isPopupMode) {
-          voiceDebugLog('解析依頼待機', 'opener 送信失敗 → 親の POLL 待ち');
-        } else {
-          voiceDebugLog('解析依頼失敗', '親ウィンドウに届きませんでした');
-        }
+        analyzeAcceptedByParent_ = false;
+        startParentPing_();
+        sendToParent(buildAnalyzeMessage_(requestPayload));
+        voiceDebugLog('解析依頼送信中', 'PING で親へ再送しながら待機');
         setTimeout(() => {
           if (!pendingAnalyzeResolver) {
             return;
@@ -676,12 +736,24 @@
       });
     }
 
+    function replyPingToParent_(sourceWindow, targetOrigin) {
+      if (!sourceWindow || !targetOrigin || !requestId) {
+        return false;
+      }
+      try {
+        sourceWindow.postMessage(buildPingMessage_(), targetOrigin);
+        debugPingSendCount += 1;
+        return true;
+      } catch (err) {
+        return false;
+      }
+    }
+
     function replyAnalyzeRequestToParent_(sourceWindow, targetOrigin) {
       if (!pendingAnalyzeRequest || !pendingAnalyzeResolver || !sourceWindow || !targetOrigin) {
         return false;
       }
       sourceWindow.postMessage(buildAnalyzeMessage_(pendingAnalyzeRequest), targetOrigin);
-      markAnalyzeRequestSent_();
       voiceDebugLog('解析依頼送信', 'POLL 応答 → ' + targetOrigin);
       return true;
     }
@@ -693,6 +765,22 @@
           return;
         }
         if (!isTrustedParentOrigin(event.origin)) {
+          return;
+        }
+        if (data.type === 'AUDIO_DIARY_PONG') {
+          if (!data.requestId || String(data.requestId) !== requestId) {
+            return;
+          }
+          debugPongRecvCount += 1;
+          if (data.analyzeAccepted) {
+            analyzeAcceptedByParent_ = true;
+          }
+          if (debugPongRecvCount === 1 || debugPongRecvCount % 10 === 0) {
+            voiceDebugLog(
+              'PONG受信',
+              debugPongRecvCount + '回目' + (analyzeAcceptedByParent_ ? ' / 親が受付済' : '')
+            );
+          }
           return;
         }
         if (data.type === 'AUDIO_DIARY_ANALYZE_RESULT') {
@@ -712,13 +800,19 @@
           if (!data.requestId || String(data.requestId) !== requestId) {
             return;
           }
-          if (data.parentOrigin) {
-            parentOrigin = String(data.parentOrigin);
+          rememberParentChannel_(event.source, event.origin);
+          if (data.parentOrigin && isTrustedParentOrigin(String(data.parentOrigin))) {
+            // URL/INIT 側のヒントも保持しつつ、実送信元 origin を優先
+            if (!lastParentOrigin) {
+              parentOrigin = String(data.parentOrigin);
+            }
           }
           debugPollCount += 1;
           if (debugPollCount === 1 || debugPollCount % 10 === 0) {
-            voiceDebugLog('POLL受信', debugPollCount + '回目');
+            voiceDebugLog('POLL受信', debugPollCount + '回目 → ' + event.origin);
           }
+          // event.source / event.origin への直接返信が最も確実
+          replyPingToParent_(event.source, event.origin);
           replyAnalyzeRequestToParent_(event.source, event.origin);
           return;
         }
@@ -747,19 +841,25 @@
         }
 
         parentOrigin = data.parentOrigin;
+        rememberParentChannel_(event.source, event.origin);
         requestId = String(data.requestId);
         currentMode = data.mode === 'family_diary' ? 'family_diary' : currentMode;
 
         embedReady = true;
         document.getElementById('embedWaiting').style.display = 'none';
         clearError();
+        replyPingToParent_(event.source, event.origin);
         setControlsEnabled(true);
         updateStatusMessage();
         voiceDebugLog('接続準備完了', 'INIT メッセージ受信');
+        startParentPing_();
       });
     }
 
     function getMessageTarget_() {
+      if (lastParentSource) {
+        return lastParentSource;
+      }
       if (isPopupMode && window.opener) {
         return window.opener;
       }
@@ -770,15 +870,25 @@
     }
 
     function sendToParent(message) {
-      const target = getMessageTarget_();
-      if (!isEmbedMode || !target) {
-        return false;
-      }
-      const targets = getParentPostTargets_();
-      if (!targets.length) {
+      if (!isEmbedMode) {
         return false;
       }
       let sent = false;
+      // POLL/INIT で覚えた source + origin が最優先
+      if (lastParentSource && lastParentOrigin) {
+        try {
+          lastParentSource.postMessage(message, lastParentOrigin);
+          sent = true;
+        } catch (err0) {}
+      }
+      const target = getMessageTarget_();
+      if (!target) {
+        return sent;
+      }
+      const targets = getParentPostTargets_();
+      if (!targets.length && !sent) {
+        return false;
+      }
       for (let i = 0; i < targets.length; i++) {
         try {
           target.postMessage(message, targets[i]);
@@ -786,6 +896,12 @@
         } catch (err) {
           // 別 origin を試す
         }
+      }
+      if (!sent) {
+        try {
+          target.postMessage(message, '*');
+          sent = true;
+        } catch (err2) {}
       }
       return sent;
     }
