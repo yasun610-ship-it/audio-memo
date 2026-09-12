@@ -269,19 +269,52 @@
     }
     .voice-debug-panel {
       display: none;
-      margin-bottom: 16px;
-      padding: 10px 12px;
+      margin: 0;
+      padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid #cbd5e1;
       background: #f8fafc;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.72rem;
-      line-height: 1.5;
-      color: #334155;
+      font-size: 0.68rem;
+      line-height: 1.45;
+      color: #64748b;
       white-space: pre-wrap;
       word-break: break-all;
+      max-height: 180px;
+      overflow: auto;
     }
-    body.embed-mode .voice-debug-panel {
+    .voice-debug-details {
+      display: none;
+      position: fixed;
+      right: 8px;
+      bottom: 8px;
+      z-index: 50;
+      width: min(280px, calc(100vw - 16px));
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 4px 8px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+      opacity: 0.72;
+    }
+    .voice-debug-details summary {
+      cursor: pointer;
+      font-size: 0.68rem;
+      color: #94a3b8;
+      list-style: none;
+      user-select: none;
+    }
+    .voice-debug-details summary::-webkit-details-marker {
+      display: none;
+    }
+    .voice-debug-details[open] {
+      opacity: 0.95;
+    }
+    .voice-debug-details[open] .voice-debug-panel {
+      display: block;
+      margin-top: 6px;
+    }
+    body.embed-mode .voice-debug-details {
       display: block;
     }
     .diary-done-backdrop {
@@ -337,6 +370,57 @@
     .diary-done-actions .btn-success {
       flex: 1 1 160px;
     }
+    .analyze-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 900;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      background: rgba(248, 250, 252, 0.88);
+    }
+    .analyze-overlay.is-open {
+      display: flex;
+    }
+    .analyze-overlay-card {
+      width: min(100%, 360px);
+      text-align: center;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(15, 23, 42, 0.12);
+      padding: 28px 22px 24px;
+    }
+    .analyze-spinner {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 16px;
+      border: 3px solid #e2e8f0;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: analyze-spin 0.8s linear infinite;
+    }
+    @keyframes analyze-spin {
+      to { transform: rotate(360deg); }
+    }
+    .analyze-overlay-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .analyze-overlay-elapsed {
+      font-size: 1.25rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+    .analyze-overlay-hint {
+      font-size: 0.85rem;
+      color: var(--text-sub);
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
@@ -360,7 +444,6 @@
     <strong>ブラウザ録音は GAS の仕様上使えません。</strong> 下の「音声ファイルを選択」から試してください。
   </div>
   <div id="errorBanner" class="error-banner" role="alert"></div>
-  <pre id="voiceDebugPanel" class="voice-debug-panel" aria-live="polite"></pre>
 
   <!-- 接続設定エリア -->
   <div id="configCard" class="card">
@@ -398,6 +481,15 @@
 
   <div id="statusArea" class="status-area">
     ⏳ 音声データを解析中...
+  </div>
+
+  <div id="analyzeOverlay" class="analyze-overlay" hidden aria-live="polite" aria-busy="true">
+    <div class="analyze-overlay-card">
+      <div class="analyze-spinner" aria-hidden="true"></div>
+      <p id="analyzeOverlayTitle" class="analyze-overlay-title">日記を作成しています</p>
+      <p id="analyzeOverlayElapsed" class="analyze-overlay-elapsed">経過 0:00</p>
+      <p id="analyzeOverlayHint" class="analyze-overlay-hint">通常 1〜3 分かかることがあります。このままお待ちください。</p>
+    </div>
   </div>
 
   <!-- family_diary 結果 -->
@@ -459,6 +551,11 @@
 
   <p id="uiBuildTag" class="ui-build-tag" aria-label="UIバージョン"></p>
 
+  <details id="voiceDebugDetails" class="voice-debug-details">
+    <summary>テスト用デバッグ</summary>
+    <pre id="voiceDebugPanel" class="voice-debug-panel" aria-live="polite"></pre>
+  </details>
+
   <div id="diaryDoneBackdrop" class="diary-done-backdrop" hidden>
     <div
       class="diary-done-dialog"
@@ -477,7 +574,7 @@
   </div>
 
   <script>
-    const UI_BUILD = '2026-09-12-a';
+    const UI_BUILD = '2026-09-12-c';
     let mediaRecorder;
     let audioChunks = [];
     let recordInterval;
@@ -500,6 +597,8 @@
     let parentPingTimer = null;
     let analyzeAcceptedByParent_ = false;
     let debugLastEvent = '-';
+    let analyzeElapsedTimer = null;
+    let analyzeElapsedSeconds = 0;
     const MAX_RECORD_SECONDS = 300;
     const ANALYZE_TIMEOUT_MS = 360000;
 
@@ -514,6 +613,7 @@
       if (!panel) {
         return;
       }
+      panel.style.display = 'block';
       const lines = [
         '[テスト用デバッグ]',
         'UI: ' + UI_BUILD,
@@ -1222,11 +1322,66 @@
       reader.readAsDataURL(blob);
     }
 
+    function formatAnalyzeElapsed_(totalSeconds) {
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+      return String(mins) + ':' + String(secs).padStart(2, '0');
+    }
+
+    function stopAnalyzeElapsed_() {
+      if (analyzeElapsedTimer) {
+        clearInterval(analyzeElapsedTimer);
+        analyzeElapsedTimer = null;
+      }
+    }
+
+    function startAnalyzeElapsed_() {
+      stopAnalyzeElapsed_();
+      analyzeElapsedSeconds = 0;
+      const elapsedEl = document.getElementById('analyzeOverlayElapsed');
+      if (elapsedEl) {
+        elapsedEl.textContent = '経過 ' + formatAnalyzeElapsed_(0);
+      }
+      analyzeElapsedTimer = setInterval(function() {
+        analyzeElapsedSeconds += 1;
+        if (elapsedEl) {
+          elapsedEl.textContent = '経過 ' + formatAnalyzeElapsed_(analyzeElapsedSeconds);
+        }
+      }, 1000);
+    }
+
+    function setAnalyzeOverlayOpen_(isOpen) {
+      const overlay = document.getElementById('analyzeOverlay');
+      if (!overlay) {
+        return;
+      }
+      if (isOpen) {
+        const titleEl = document.getElementById('analyzeOverlayTitle');
+        const hintEl = document.getElementById('analyzeOverlayHint');
+        if (currentMode === 'family_diary') {
+          if (titleEl) titleEl.textContent = '日記を作成しています';
+          if (hintEl) hintEl.textContent = '通常 1〜3 分かかることがあります。このままお待ちください。';
+        } else {
+          if (titleEl) titleEl.textContent = '音声を解析しています';
+          if (hintEl) hintEl.textContent = '文字起こしと整理を実行中です。しばらくお待ちください。';
+        }
+        overlay.hidden = false;
+        overlay.classList.add('is-open');
+        startAnalyzeElapsed_();
+      } else {
+        overlay.classList.remove('is-open');
+        overlay.hidden = true;
+        stopAnalyzeElapsed_();
+      }
+    }
+
     function showStatus(isLoading) {
       document.getElementById('statusArea').style.display = isLoading ? 'block' : 'none';
+      setAnalyzeOverlayOpen_(!!isLoading);
       if (isLoading) {
         document.getElementById('resultContainer').style.display = 'none';
         document.getElementById('diaryResultContainer').style.display = 'none';
+        closeDiaryDoneDialog();
       }
     }
 
